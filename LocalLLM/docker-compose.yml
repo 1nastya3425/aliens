@@ -1,0 +1,22 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: dockerfile
+    container_name: support-agent-backend
+    ports:
+      - "3000:3000"
+    environment:
+      GEMMA_URL: "http://host.docker.internal:1234/v1/chat/completions"
+      MISTRAL_URL: "http://host.docker.internal:1234/v1/chat/completions"
+    command: ["node", "server.js"]
+
+  frontend:
+    build:
+      context: ./support-agent-web
+    container_name: support-agent-frontend
+    ports:
+      - "5173:5173"
+    command: ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+    depends_on:
+      - backend
