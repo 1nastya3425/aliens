@@ -44,9 +44,3 @@ paths:
                       type: string
                     content:
                       type: string
-
-    delete:
-      summary: Очистить историю чата
-      responses:
-        "200":
-          description: История очищена

@@ -5,6 +5,7 @@
   flex-direction: column;
   height: 100vh;
   position: relative;
+  overflow: visible;
 }
 
 .chat-messages {
@@ -13,23 +14,41 @@
   flex-direction: column;
   gap: $spacing-md;
   overflow-y: auto;
-  padding: $spacing-lg 0;
+  position: relative;
+  padding: $spacing-lg 12px;
   -ms-overflow-style: none;
   scrollbar-width: thin;
   scrollbar-color: transparent transparent;
   
+  .simplebar-content {
+    padding: $spacing-lg 0;
+  }
+
+  .simplebar-scrollbar::before {
+    background-color: $chat-agent-bg;
+    border-radius: 4px;
+    width: 4px;
+  }
+
   min-height: 300px;
 }
 
-.welcome-message {
-  font-size: 1.6rem;
-  color: rgba(255, 255, 255, 0.8);
-  text-align: center;
-  max-width: 600px;
-  line-height: 1.6;
-  margin: auto;
-  font-family: 'Roboto', $font-main;
-  font-weight: 500;
+.welcome-screen {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+
+  .welcome-message {
+    font-size: 1.6rem;
+    color: rgba(255, 255, 255, 0.8);
+    text-align: center;
+    max-width: 600px;
+    line-height: 1.6;
+    margin: auto;
+    font-family: 'Roboto', $font-main;
+    font-weight: 500;
+  }
 }
 
 .message-wrapper {
@@ -42,6 +61,21 @@
 
   &.agent {
     align-items: flex-start;
+  }
+}
+
+@keyframes blink {
+  0%, 100% {
+    content: "";
+  }
+  25% {
+    content: ".";
+  }
+  50% {
+    content: "..";
+  }
+  75% {
+    content: "...";
   }
 }
 
@@ -67,6 +101,15 @@
     margin: 0;
     color: $agent-answer-text-color;
     font-family: 'Open Sans', $font-main;
+  }
+
+  p.typing-indicator {
+    font-style: italic;
+    &::after {
+      content: "";
+      font-style: italic;
+      animation: blink 1.4s infinite both;
+    }
   }
 }
 

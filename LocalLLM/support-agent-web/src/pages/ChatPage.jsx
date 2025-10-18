@@ -11,8 +11,11 @@ const ChatPage = () => {
   const [messages, setMessages] = useState([]);
   const [inputValue, setInputValue] = useState('');
   const [hasUserSentMessage, setHasUserSentMessage] = useState(false);
-  const chatMessagesRef = useRef(null);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
+
+  const [isLoading, setIsLoading] = useState(false);
+
+  const simpleBarRef = useRef();
 
   useEffect(() => {
     async function loadHistory() {
@@ -29,58 +32,78 @@ const ChatPage = () => {
       }
     }
     loadHistory();
-  }, []);
+  }, []); // История загружается только один раз при монтировании компонента
 
   useEffect(() => {
-    if (chatMessagesRef.current) {
-      chatMessagesRef.current.scrollTop = chatMessagesRef.current.scrollHeight;
+    if (simpleBarRef.current && simpleBarRef.current.getScrollElement()) {
+      const scrollElement = simpleBarRef.current.getScrollElement();
+      scrollElement.scrollTo({
+        top: scrollElement.scrollHeight,
+        behavior: 'smooth'
+      });
     }
   }, [messages]);
 
   const handleSend = async (text) => {
+    if (isLoading || !text.trim()) {
+      return;
+    }
+
+    setIsLoading(true);
+    
     if (!hasUserSentMessage) {
       setHasUserSentMessage(true);
     }
 
+    // Добавляем сообщение пользователя
     setMessages((prev) => [...prev, { text, isUser: true }]);
-    setInputValue('');
+    setInputValue(''); // Очищаем поле ввода
 
+    const loadingMessage = { text: "думает", isUser: false, isTyping: true };
+    setMessages(prev => [...prev, loadingMessage]);
+    
     try {
-      const { answer, history } = await getAnswer(text);
-      setMessages((prev) => [
-        ...prev,
-        { text: answer, isUser: false },
-        ...history.map((h) => ({
-          text: h.content,
-          isUser: h.role === 'user',
-        })),
-      ]);
+      const { answer } = await getAnswer(text);
+      setMessages(prev => {
+        const updatedMessages = [...prev];
+        const typingIndex = updatedMessages.findIndex(msg => msg.isTyping);
+        if (typingIndex !== -1) {
+          updatedMessages[typingIndex] = { text: answer, isUser: false };
+        }
+        return updatedMessages;
+      });
     } catch (error) {
       console.error('Ошибка при отправке сообщения:', error);
-      setMessages((prev) => [
-        ...prev,
-        { text: 'Ошибка сервера. Попробуйте позже.', isUser: false },
-      ]);
+      setMessages(prev => {
+        const updatedMessages = [...prev];
+        const typingIndex = updatedMessages.findIndex(msg => msg.isTyping);
+        if (typingIndex !== -1) {
+          updatedMessages[typingIndex] = { text: 'Ошибка сервера. Попробуйте позже.', isUser: false };
+        }
+        return updatedMessages;
+      });
+    } finally {
+      setIsLoading(false); // Сбрасываем состояние загрузки
     }
   };
 
   const handleClear = () => {
-    setShowConfirmModal(true);
+    setShowConfirmModal(true); // Показываем модальное окно подтверждения
   };
 
   const handleConfirmClear = async () => {
-    const success = await clearHistory();
+    const success = await clearHistory(); // Очищаем историю на сервере
     if (success) {
-      setMessages([]);
-      setHasUserSentMessage(false);
+      setMessages([]); // Очистка сообщений в UI
+      setHasUserSentMessage(false); // Сбрасываем состояние отправки
     } else {
       alert('Ошибка при очистке чата');
     }
-    setShowConfirmModal(false);
+    setShowConfirmModal(false); // Закрываем модальное окно
   };
 
   const handleCancelClear = () => {
-    setShowConfirmModal(false);
+    setShowConfirmModal(false); // Закрываем модальное окно
   };
 
   return (
@@ -90,26 +113,34 @@ const ChatPage = () => {
         hasUserSentMessage={hasUserSentMessage}
         onClear={handleClear}
       />
-      <SimpleBar style={{ flex: 1, padding: 'var(--spacing-lg) 0' }} className="chat-messages">
-        {messages.length === 0 ? (
+      {messages.length === 0 ? (
+        <div className="welcome-screen">
           <div className="welcome-message">
-            Добрый день! <br></br>Чем я могу Вам помочь?
+            Добрый день! <br />Чем я могу Вам помочь?
           </div>
-        ) : (
-          messages.map((msg, i) => (
+        </div>
+      ) : (
+        <SimpleBar
+          ref={simpleBarRef}
+          style={{ flex: 1, display: 'flex', flexDirection: 'column' }}
+          className="chat-messages"
+        >
+          {messages.map((msg, i) => (
             <div key={i} className={`message-wrapper ${msg.isUser ? 'user' : 'agent'}`}>
               {msg.isUser ? (
                 <ChatBubble isUser={msg.isUser}>{msg.text}</ChatBubble>
               ) : (
                 <div className="agent-message">
                   <h3>Ответ ИИ-Агента</h3>
-                  <p>{msg.text}</p>
+                  <p className={msg.isTyping ? 'typing-indicator' : ''}>
+                    {msg.text}
+                  </p>
                 </div>
               )}
             </div>
-          ))
-        )}
-      </SimpleBar>
+          ))}
+        </SimpleBar>
+      )}
       <div className="input-container">
         <InputField
           value={inputValue}

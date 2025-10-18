@@ -1,7 +1,7 @@
 import fs from "fs";
 import axios from "axios";
 import { BANK_PROMPT } from "./prompt.js";
-import { isAllowedQuestion, isOperatorRequest, classifySimple } from "./classifier.js";
+import { isAllowedQuestion, isOperatorRequest, classify } from "./classifier.js";
 
 // Метрики из prom-client
 import {
@@ -23,7 +23,47 @@ const MISTRAL_URL = process.env.MISTRAL_URL || "http://localhost:1236/v1/chat/co
 const HISTORY_FILE = "/app/data/chat_history.json";
 const LOG_FILE = "/app/data/logs.txt";
 
+function trimHistory(history, maxTokens = 2000) {
+  let totalTokens = 0;
+  let trimmedHistory = [];
+
+  // Перебираем историю в обратном порядке
+  for (let i = history.length - 1; i >= 0; i--) {
+    const message = history[i];
+    const tokens = message.content.split(/\s+/).length;  // Считаем количество токенов в сообщении
+    totalTokens += tokens;
+
+    // Если общая длина превышает лимит, останавливаемся
+    if (totalTokens > maxTokens) break;
+
+    trimmedHistory.unshift(message);  // Добавляем сообщение в начало массива
+  }
+
+  return trimmedHistory;
+}
+
+function saveHistory(userMsg, assistantMsg) {
+  let history = [];
+  if (fs.existsSync(HISTORY_FILE)) {
+    try { history = JSON.parse(fs.readFileSync(HISTORY_FILE, "utf-8")) || []; }
+    catch { history = []; }
+  }
+  history.push(userMsg, assistantMsg);
+  fs.writeFileSync(HISTORY_FILE, JSON.stringify(history, null, 2));
+}
+
+function loadHistory() {
+  if (!fs.existsSync(HISTORY_FILE)) return [];
+  try {
+    return JSON.parse(fs.readFileSync(HISTORY_FILE, "utf-8")) || [];
+  } catch (error) {
+    console.error("Ошибка при загрузке истории:", error);
+    return [];
+  }
+}
+
 // --- Утилиты ---
+// Стоп-слова для русского языка
 const RU_STOPWORDS = new Set([
   "и", "или", "а", "но", "что", "как", "в", "во", "на", "за", "по", "из", "от", "до", "для",
   "при", "над", "под", "о", "об", "про", "у", "к", "с", "со", "же", "ли", "бы", "то", "это",
@@ -31,6 +71,7 @@ const RU_STOPWORDS = new Set([
   "ваш", "ваша", "ваши", "их", "его", "ее", "есть", "нет", "не", "да", "же"
 ]);
 
+// Токенизация текста
 function tokens(s) {
   return s
     .toLowerCase()
@@ -39,6 +80,7 @@ function tokens(s) {
     .filter(t => t && !RU_STOPWORDS.has(t));
 }
 
+// Функция для вычисления коэффициента пересечения между двумя строками
 function overlapRatio(a, b) {
   const A = new Set(tokens(a));
   const B = new Set(tokens(b));
@@ -47,11 +89,13 @@ function overlapRatio(a, b) {
   return inter / Math.min(A.size, B.size);
 }
 
+// Функция для поиска HTTP кодов в тексте
 function hasHttpCode(s) {
   const m = s.match(/\b(4\d\d|5\d\d)\b/);
   return m ? m[0] : null;
 }
 
+// Функция для построения подмножества FAQ на основе вопроса
 function buildFaqSubset(question) {
   const q = question.toLowerCase();
   const tags = [];
@@ -120,22 +164,31 @@ export async function searchFAQWithGemma(question) {
   }
 }
 
-// --- Основной ответ от LLM ---
-export async function askLLM(question) {
+// --- Основной ответ от LLM с учетом истории ---
+export async function askLLMWithHistory(question) {
   const start = Date.now();
+  const history = loadHistory();
+
+  // Обрезаем историю, чтобы она не превышала лимит по токенам
+  const historyForLLM = trimHistory(history);
+
+  // Подготавливаем сообщения для LLM, включая историю чата
+  const messages = [
+    { role: "system", content: BANK_PROMPT },
+    ...historyForLLM.map(msg => ({ role: msg.role, content: msg.content })),
+    { role: "user", content: question }
+  ];
+
   try {
     const response = await axios.post(MISTRAL_URL, {
       model: "fireball-meta-llama-3.2-8b-instruct-agent-003-128k-code-dpo",
-      messages: [
-        { role: "system", content: BANK_PROMPT },
-        { role: "user", content: question }
-      ],
+      messages: messages,
       temperature: 0.3
     });
 
     let answer = response.data.choices?.[0]?.message?.content?.trim() ?? "";
     const sentences = answer.split(/(?<=[.!?])\s+/);
-    if (sentences.length > 2) answer = sentences.slice(0, 2).join(" ");
+    if (sentences.length > 2) answer = sentences.slice(0, 2).join(" "); // Ограничиваем ответ для краткости
 
     responseTime.observe(Date.now() - start);
     return { type: "llm", answer };
@@ -146,6 +199,7 @@ export async function askLLM(question) {
 }
 
 // --- Логирование и история ---
+// Логирование взаимодействия с чатом
 function logInteraction(question, category, source, answer) {
   const logLine =
     `[${new Date().toISOString()}] Категория: ${category} | Источник: ${source}\n` +
@@ -153,28 +207,19 @@ function logInteraction(question, category, source, answer) {
   fs.appendFileSync(LOG_FILE, logLine, "utf8");
 }
 
-function saveHistory(userMsg, assistantMsg) {
-  let history = [];
-  if (fs.existsSync(HISTORY_FILE)) {
-    try { history = JSON.parse(fs.readFileSync(HISTORY_FILE, "utf-8")) || []; }
-    catch { history = []; }
-  }
-  history.push(userMsg, assistantMsg);
-  fs.writeFileSync(HISTORY_FILE, JSON.stringify(history, null, 2));
-}
-
-// --- Главный обработчик ---
+// Главный обработчик запросов
 export async function getAnswer(question) {
   totalQuestions.inc();
 
   const clean = question.toLowerCase().trim();
   let finalAnswer, source;
+  let category = "Неизвестно";
 
   // Проверяем запрос на оператора (автооператор)
   if (isOperatorRequest(clean)) {
     finalAnswer = "🧑‍💻 Передаю обращение автооператору. Ожидайте ответа.";
-    forwardedToOperator.labels("explicit").inc();  // явный запрос
-    source = "operator";  // указываем источник
+    forwardedToOperator.labels("explicit").inc(); 
+    source = "operator";  
   } else if (["спасибо", "благодарю"].includes(clean)) {
     finalAnswer = "Пожалуйста!";
     source = "rule";
@@ -186,14 +231,18 @@ export async function getAnswer(question) {
     source = "filter";
   } else {
     // Применяем классификатор
-    const category = classifySimple(question);
+    category = await classify(question);
+
+    // Если категоризация не сработала, оставляем дефолтное значение для category
+    if (!category) {
+      category = "Неизвестно"; 
+    }
 
     if (category === "Ошибки") {
-      // Если классификатор определяет ошибку, сразу обрабатываем запрос в FAQ
       const faqGemma = await searchFAQWithGemma(question);
       if (faqGemma) {
         answeredByFAQ.inc();
-        finalAnswer = `📚 Ответ из базы знаний: ${faqGemma.answer}`;
+        finalAnswer = `${faqGemma.answer}`;
         source = "faq";
       } else {
         finalAnswer = "🧑‍💻 Передаю обращение специалисту поддержки. Ожидайте ответа.";
@@ -201,17 +250,16 @@ export async function getAnswer(question) {
         source = "operator-fallback";
       }
     } else {
-      // Иначе идем в модель
-      const faqGemma = await searchFAQWithGemma(question);
+      const faqGemma = await searchFAQWithGemma(question); 
       if (faqGemma) {
         answeredByFAQ.inc();
-        finalAnswer = `📚 Ответ из базы знаний: ${faqGemma.answer}`;
+        finalAnswer = `${faqGemma.answer}`;
         source = "faq";
       } else {
-        const llm = await askLLM(question);
+        const llm = await askLLMWithHistory(question); 
         if (llm.type === "llm") {
           answeredByLLM.inc();
-          finalAnswer = `🤖 Ответ от mistra: ${llm.answer}`;
+          finalAnswer = `${llm.answer}`;
           source = "llm";
         } else {
           forwardedToOperator.labels("fallback").inc();
@@ -223,7 +271,11 @@ export async function getAnswer(question) {
   }
 
   saveHistory({ role: "user", content: question }, { role: "assistant", content: finalAnswer });
-  logInteraction(question, classifySimple(question), source, finalAnswer);
+
+  // Логирование с категорией, которая теперь всегда определена
+  await logInteraction(question, category, source, finalAnswer); 
 
   return { answer: finalAnswer, meta: { source } };
 }
+
+

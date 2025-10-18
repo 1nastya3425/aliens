@@ -1,21 +1,22 @@
-// classifier.js
+import axios from "axios";
+import { exec as execCb } from 'child_process';
+import { promisify } from 'util';
+import fs from "fs";
 
 // --- Нормализация -----------------------------------------------------------
 function normalize(s) {
-  // Убираем все символы, которые не буквы, цифры или пробелы, и приводим строку к нижнему регистру
   const normalized = s
     .toLowerCase()
-    .replace(/ё/g, "е")                    // заменяем "ё" на "е"
+    .replace(/ё/g, "е")
     .replace(/[^a-zа-я0-9\s]/gi, "")        // оставляем только буквы и цифры, удаляем все остальные символы
     .replace(/\s+/g, " ")                  // заменяем несколько пробелов на один
     .trim();                               // убираем пробелы в начале и в конце
-
   return normalized;
 }
 
-// Токенизация с улучшенным стеммингом (расширим окончания)
+// Токенизация с улучшенным стеммингом
 function tokenize(s) {
-  const endings = /(ами|ями|ами|ями|ого|его|ому|ему|ах|ях|ов|ев|ам|ям|ой|ей|ою|ею|ых|их|ый|ий|ое|ее|ая|яя|ые|ие|ов|ев|ью|ья|ии|ие|ия|ий|ам|ям|у|е|ы|и|а|я|о|е|ть|ться|ться|тся)$/;
+  const endings = /(ами|ями|ами|ями|ого|его|ому|ему|ах|ях|ов|ев|ам|ям|ой|ей|ою|ею|ых|их|ый|ий|ое|ее|ая|яя|ые|ие|ов|ев|ью|ья|ии|ие|ия|ий|ам|ям|у|е|ы|и|а|я|о|е|ть|ться|тся)$/;
   return normalize(s)
     .split(" ")
     .map(t => t.replace(endings, ""))
@@ -30,14 +31,21 @@ function prep(question) {
   return { norm, tokens, set };
 }
 
+// --- Категории и проверка запроса ------------------------------------------
+const categories = {
+  "Аутентификация": ["вход", "логин", "пароль", "аккаунт", "сессия", "восстановление"],
+  "Оплата": ["оплата", "счет", "карта", "подписка", "платеж", "перевод", "платеж не прошел"],
+  "Ошибки": ["ошибка", "не работает", "платеж не прошел", "системная ошибка", "зависает", "ошибка 500", "не открывается"],
+  "Технический вопрос": ["настройка", "установка", "подключение", "система", "работа программы", "обновление"],
+  "Безопасность": ["двухфакторная аутентификация", "код безопасности", "биометрия", "проверка безопасности"]
+};
+
 // --- Запрещённые и служебные триггеры --------------------------------------
-// Мат/нежелательное (включая вариации и транслит/обфускацию)
 const bannedPatterns = [
   "хуй", "пизд", "ебан", "нахер", "секс", "порно", "эротик",
   "huy", "fuck"  // на всякий случай
 ];
 
-// Оператор (рус/англ фразы и формы)
 const operatorPatterns = [
   "оператор", 
   "живой человек", 
@@ -51,108 +59,67 @@ const operatorPatterns = [
   "agent"
 ];
 
-// --- Категории (IT, HR, Accounting) -----------------------------------------
-// Каждая категория: список паттернов с весами для точности
-const CATEGORIES = {
-  "IT": [
-    { pattern: "приложен", weight: 0.8 },
-    { pattern: "сеть", weight: 0.7 },
-    { pattern: "оборудован", weight: 0.6 },
-    { pattern: "ошибк", weight: 0.5 },
-    { pattern: "сервер", weight: 0.7 },
-    { pattern: "настройк", weight: 0.6 }
-  ],
-  "HR": [
-    { pattern: "отпуск", weight: 0.9 },
-    { pattern: "зарплат", weight: 0.8 },
-    { pattern: "документ", weight: 0.7 },
-    { pattern: "больничн", weight: 0.6 },
-    { pattern: "кадр", weight: 0.5 }
-  ],
-  "Accounting": [
-    { pattern: "счет", weight: 0.9 },
-    { pattern: "отчет", weight: 0.8 },
-    { pattern: "налог", weight: 0.7 },
-    { pattern: "фактур", weight: 0.6 },
-    { pattern: "расчет", weight: 0.5 }
-  ]
-};
+// --- Интеграция с моделью для классификации -------------------------------
+const exec = promisify(execCb);
+async function classifyWithAI(question) {
+  return new Promise((resolve, reject) => {
+    exec(`/venv/bin/python /app/agent/model/predict.py "${question}"`, { encoding: 'utf8' }, (error, stdout, stderr) => {
+      if (error) {
+        reject(`Ошибка: ${error.message}`);
+        return;
+      }
+      if (stderr) {
+        reject(`stderr: ${stderr}`);
+        return;
+      }
+      // Возвращаем результат из Python-скрипта (предсказанную категорию)
+      resolve(stdout.trim());
+    });
+  });
+}
 
-// Доп. быстрые ключи для релевантности домена
-const DOMAIN_HINTS = [
-  "IT", "HR", "accounting", "техподдержк", "кадр", "бухгалтер"
-];
-
-// --- API --------------------------------------------------------------------
+// --- Проверка запроса -----------------------------------
+// Проверка на допустимый вопрос
 export function isAllowedQuestion(question) {
   const { norm } = prep(question);
   return !bannedPatterns.some(pattern => norm.includes(pattern));
 }
 
+// Проверка запроса на оператора
 export function isOperatorRequest(question) {
   const { norm } = prep(question);
-  const result = operatorPatterns.some(pattern => norm.includes(pattern.toLowerCase()));
-  return result;
+  return operatorPatterns.some(pattern => norm.includes(pattern.toLowerCase()));
 }
 
-/**
- * Возвращает лучшую категорию + метаданные:
- * { category: string, confidence: 0..1, matched: string[] }
- */
-export function classify(question) {
+// Классификация вопроса на основе категорий
+export async function classify(question) {
   const { norm, tokens } = prep(question);
 
-  // Приоритет "ошибки" в IT
-  const errorHit = CATEGORIES["IT"].some(item => norm.includes(item.pattern) && /ошибк/.test(norm));
+  // Проверка на запрещённые слова
+  if (!isAllowedQuestion(question)) {
+    return "Запрещённый запрос. Пожалуйста, не используйте оскорбительные слова.";
+  }
 
-  const scores = {};
-  const matched = {};
+  // Проверка на запрос оператора
+  if (isOperatorRequest(question)) {
+    return "Запрос на оператора. Мы передадим ваш запрос специалисту.";
+  }
 
-  for (const [cat, patterns] of Object.entries(CATEGORIES)) {
-    let score = 0;
-    let hits = [];
-    for (const { pattern, weight } of patterns) {
-      if (norm.includes(pattern)) {
-        score += weight; // Используем веса для точности
-        hits.push(pattern);
-      }
-    }
-    if (score > 0) {
-      scores[cat] = score;
-      matched[cat] = hits;
+  // Отправляем запрос на модель AI для классификации
+  const aiClassification = await classifyWithAI(question);
+
+  // Если модель вернула категорию, возвращаем её
+  if (aiClassification) {
+    return `${aiClassification}`;
+  }
+
+  // Определение категории на основе ключевых слов (если AI не может классифицировать)
+  for (let category in categories) {
+    if (categories[category].some(keyword => tokens.includes(keyword))) {
+      return `${category}`;
     }
   }
 
-  // Если ничего не сработало — проверим общую релевантность
-  const isDomainRelevant = DOMAIN_HINTS.some(hint => norm.includes(hint));
-  if (!Object.keys(scores).length) {
-    return {
-      category: isDomainRelevant ? "Другое (релевантное)" : "Нерелевантное",
-      confidence: isDomainRelevant ? 0.3 : 0.0,
-      matched: []
-    };
-  }
-
-  // Усилим "IT" при наличии ошибок
-  if (errorHit) scores["IT"] = (scores["IT"] || 0) + 0.5;
-
-  // Выберем max
-  let best = Object.entries(scores).sort((a, b) => b[1] - a[1])[0];
-  const [category] = best;
-  const rawScore = best[1];
-  const confidence = Math.min(1, rawScore / 2); // Нормируем confidence (максимум 2 веса = 1)
-
-  return {
-    category,
-    confidence,
-    matched: matched[category] || []
-  };
-}
-
-/**
- * Упрощённая классификация с обратной совместимостью
- */
-export function classifySimple(question) {
-  const res = classify(question);
-  return res.category;
+  // Если не удалось классифицировать, вернуть общий ответ
+  return "Не удалось классифицировать запрос. Пожалуйста, уточните ваш вопрос.";
 }
