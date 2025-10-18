@@ -1,0 +1,68 @@
+{
+  "id": null,
+  "title": "Support Agent Dashboard",
+  "timezone": "browser",
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Всего вопросов",
+      "targets": [{ "expr": "hat_questions_total" }],
+      "id": 1
+    },
+    {
+      "type": "stat",
+      "title": "Ответы из FAQ",
+      "targets": [{ "expr": "chat_answered_by_faq_total" }],
+      "id": 2
+    },
+    {
+      "type": "stat",
+      "title": "Ответы от LLM",
+      "targets": [{ "expr": "chat_answered_by_llm_total" }],
+      "id": 3
+    },
+    {
+      "type": "stat",
+      "title": "Передано оператору",
+      "targets": [{ "expr": "chat_forwarded_to_operator_total" }],
+      "id": 4
+    },
+    {
+      "type": "graph",
+      "title": "Время ответа (ms)",
+      "targets": [
+        { "expr": "histogram_quantile(0.5, sum(rate(chat_response_time_ms_bucket[5m])) by (le))", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.9, sum(rate(chat_response_time_ms_bucket[5m])) by (le))", "legendFormat": "p90" },
+        { "expr": "histogram_quantile(0.99, sum(rate(chat_response_time_ms_bucket[5m])) by (le))", "legendFormat": "p99" }
+      ],
+      "id": 5
+    },
+    {
+      "type": "piechart",
+      "title": "Распределение источников ответа",
+      "targets": [
+        { "expr": "chat_answered_by_faq_total", "legendFormat": "FAQ" },
+        { "expr": "chat_answered_by_llm_total", "legendFormat": "LLM" },
+        { "expr": "chat_forwarded_to_operator_total", "legendFormat": "Оператор" }
+      ],
+      "id": 6
+    },
+    {
+      "type": "bargauge",
+      "title": "Распределение по категориям",
+      "targets": [
+        { "expr": "chat_questions_by_category" }
+      ],
+      "id": 7
+    },
+    {
+      "type": "stat",
+      "title": "Ошибки моделей",
+      "targets": [{ "expr": "chat_errors_total" }],
+      "id": 8
+    }
+  ],
+  "schemaVersion": 36,
+  "version": 1,
+  "refresh": "10s"
+}

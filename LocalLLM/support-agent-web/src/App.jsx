@@ -1,14 +1,8 @@
-import React from "react";
-import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
-import ChatPage from "./ChatPage";
+import React from 'react';
+import ChatPage from './pages/ChatPage';
 
-export default function App() {
-  return (
-    <Router>
-      <Routes>
-        <Route path="/" element={<ChatPage />} />
-        {/* можно будет добавить и другие страницы, например FAQ, Login и т.п. */}
-      </Routes>
-    </Router>
-  );
+function App() {
+  return <ChatPage />;
 }
+
+export default App;

@@ -1,0 +1,156 @@
+@use '../styles/variables' as *;
+
+.chat-page-wrapper {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  position: relative;
+}
+
+.chat-messages {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-md;
+  overflow-y: auto;
+  padding: $spacing-lg 0;
+  -ms-overflow-style: none;
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  
+  min-height: 300px;
+}
+
+.welcome-message {
+  font-size: 1.6rem;
+  color: rgba(255, 255, 255, 0.8);
+  text-align: center;
+  max-width: 600px;
+  line-height: 1.6;
+  margin: auto;
+  font-family: 'Roboto', $font-main;
+  font-weight: 500;
+}
+
+.message-wrapper {
+  display: flex;
+  flex-direction: column;
+
+  &.user {
+    align-items: flex-end;
+  }
+
+  &.agent {
+    align-items: flex-start;
+  }
+}
+
+.agent-message {
+  width: 100%;
+  padding: 16px 0;
+  background: transparent;
+  border-radius: 12px;
+  word-wrap: break-word;
+  font-size: 1rem;
+  line-height: 1.5;
+  align-self: flex-start;
+
+  h3 {
+    margin: 0 0 $spacing-sm 0;
+    font-size: 1.2rem;
+    color: $text-primary;
+    font-weight: 700;
+    font-family: 'Roboto Flex', $font-main;
+  }
+
+  p {
+    margin: 0;
+    color: $agent-answer-text-color;
+    font-family: 'Open Sans', $font-main;
+  }
+}
+
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 2000;
+}
+
+.modal-content {
+  background: #181C20;
+  padding: 40px;
+  border-radius: 12px;
+  max-width: 600px;
+  width: 480px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 20px;
+  box-sizing: border-box;
+  font-family: 'Open Sans', $font-main;
+  font-weight: 600;
+}
+
+.modal-content p {
+  margin: 0;
+  font-size: 1.3rem;
+  color: $text-primary;
+  line-height: 1.4;
+}
+
+.modal-buttons {
+  display: flex;
+  gap: 60px;
+  justify-content: center;
+  width: 100%;
+}
+
+.modal-btn {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 20px;
+  font-size: 1rem;
+  cursor: pointer;
+  min-width: 150px;
+  text-align: center;
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+  white-space: nowrap;
+  font-family: 'Open Sans', $font-main;
+  font-weight: 600;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.15);
+  }
+}
+
+.welcome-gradient {
+  position: absolute;
+  top: calc(50% - 210px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 400px;
+  height: 400px;
+  background: radial-gradient(
+    circle,
+    rgba(46, 76, 109, 0.3) 0%,
+    rgba(46, 76, 109, 0) 70%
+  );
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.welcome-gradient.visible {
+  opacity: 1;
+}

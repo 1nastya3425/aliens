@@ -2,26 +2,23 @@ import express from "express";
 import cors from "cors";
 import fs from "fs";
 import { getAnswer } from "./agent/agent.js";
+import { register } from "./agent/metrics.js";  // 👈 только импортируем реестр
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-const CHAT_FILE = "./agent/chat_history.json";
+const CHAT_FILE = "./data/chat_history.json";
 
-// читаем историю безопасно
 function loadHistory() {
   if (!fs.existsSync(CHAT_FILE)) return [];
   try {
-    const raw = fs.readFileSync(CHAT_FILE, "utf-8").trim();
-    return raw ? JSON.parse(raw) : [];
-  } catch (e) {
-    console.warn("⚠️ Ошибка чтения истории, сбрасываю:", e.message);
+    return JSON.parse(fs.readFileSync(CHAT_FILE, "utf-8"));
+  } catch {
     return [];
   }
 }
 
-// сохраняем историю
 function saveHistory(history) {
   fs.writeFileSync(CHAT_FILE, JSON.stringify(history, null, 2));
 }
@@ -32,27 +29,28 @@ app.post("/ask", async (req, res) => {
     return res.status(400).json({ answer: "❌ Вопрос пустой", history: [] });
   }
 
-  let history = loadHistory(); // [{role, content}, ...]
-
+  let history = loadHistory();
   const { answer } = await getAnswer(question);
 
-  // сохраняем в формате role/content
   history.push({ role: "user", content: question });
   history.push({ role: "assistant", content: answer });
-
   saveHistory(history);
 
-  res.json({ answer, history }); // фронт получает готовую историю
+  res.json({ answer, history });
 });
 
 app.get("/history", (req, res) => {
   res.json(loadHistory());
 });
 
-// 🗑 очистка истории
 app.delete("/history", (req, res) => {
   saveHistory([]);
   res.json({ success: true, message: "История очищена" });
+});
+
+app.get("/metrics", async (req, res) => {
+  res.set("Content-Type", register.contentType);
+  res.end(await register.metrics());
 });
 
 app.listen(3000, () => console.log("🚀 API: http://localhost:3000"));

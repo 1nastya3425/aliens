@@ -3,23 +3,32 @@ import axios from "axios";
 import { BANK_PROMPT } from "./prompt.js";
 import { isAllowedQuestion, isOperatorRequest, classifySimple } from "./classifier.js";
 
-console.log(BANK_PROMPT);
+// Метрики из prom-client
+import {
+  totalQuestions,
+  answeredByFAQ,
+  answeredByLLM,
+  forwardedToOperator,
+  responseTime
+} from "./metrics.js";
 
 // Загружаем FAQ
 const faq = JSON.parse(fs.readFileSync("./faq.json", "utf-8"));
 
-// URL моделей из ENV (или дефолтные для локалки)
+// URL моделей
 const GEMMA_URL = process.env.GEMMA_URL || "http://localhost:1235/v1/chat/completions";
 const MISTRAL_URL = process.env.MISTRAL_URL || "http://localhost:1236/v1/chat/completions";
 
-/* ────────────────────────────────────────────────────────────────────────────
- * Утилиты
- * ────────────────────────────────────────────────────────────────────────────*/
+// Пути для логов и истории
+const HISTORY_FILE = "/app/data/chat_history.json";
+const LOG_FILE = "/app/data/logs.txt";
+
+// --- Утилиты ---
 const RU_STOPWORDS = new Set([
-  "и","или","а","но","что","как","в","во","на","за","по","из","от","до","для",
-  "при","над","под","о","об","про","у","к","с","со","же","ли","бы","то","это",
-  "этот","эта","эти","тот","та","те","мой","моя","мои","твой","твоя","твои",
-  "ваш","ваша","ваши","их","его","ее","есть","нет","не","да","же"
+  "и", "или", "а", "но", "что", "как", "в", "во", "на", "за", "по", "из", "от", "до", "для",
+  "при", "над", "под", "о", "об", "про", "у", "к", "с", "со", "же", "ли", "бы", "то", "это",
+  "этот", "эта", "эти", "тот", "та", "те", "мой", "моя", "мои", "твой", "твоя", "твои",
+  "ваш", "ваша", "ваши", "их", "его", "ее", "есть", "нет", "не", "да", "же"
 ]);
 
 function tokens(s) {
@@ -48,8 +57,8 @@ function buildFaqSubset(question) {
   const tags = [];
   if (/парол|логин|вход|аккаунт/.test(q)) tags.push("парол", "логин", "вход", "аккаунт");
   if (/оплат|карт|подписк|чек|счет|счёт/.test(q)) tags.push("оплат", "карт", "подписк", "чек", "счет", "счёт");
-  if (/ошибк|вылета|не работает|зависает|баг|код/.test(q)) tags.push("ошибк","вылета","работает","зависает","баг","код");
-  if (/email|почт/.test(q)) tags.push("email","почт");
+  if (/ошибк|вылета|не работает|зависает|баг|код/.test(q)) tags.push("ошибк", "вылета", "работает", "зависает", "баг", "код");
+  if (/email|почт/.test(q)) tags.push("email", "почт");
 
   const scored = faq.map((item, i) => {
     const fq = item.question.toLowerCase();
@@ -60,47 +69,36 @@ function buildFaqSubset(question) {
 
   let subset = scored.filter(x => x.hasTag || x.score >= 0.12);
   if (!subset.length) subset = scored;
-  subset.sort((a,b) => (b.hasTag - a.hasTag) || (b.score - a.score));
+  subset.sort((a, b) => (b.hasTag - a.hasTag) || (b.score - a.score));
   return subset.slice(0, 25);
 }
 
-/* ────────────────────────────────────────────────────────────────────────────
- * 1) FAQ через Gemma
- * ────────────────────────────────────────────────────────────────────────────*/
+// --- FAQ через Gemma ---
 export async function searchFAQWithGemma(question) {
+  const start = Date.now();
   try {
     const subset = buildFaqSubset(question);
     const listForModel = subset.map((it, i) => `[${i}] ${it.question}`).join("\n");
 
-    console.log(`🔎 Gemma FAQ: subset=${subset.length}`);
     const response = await axios.post(GEMMA_URL, {
       model: "google/gemma-3-1b",
       messages: [
-        {
-          role: "system",
-          content: `Ты — поисковик FAQ банка. Верни СТРОГО JSON:
-{"index": ЧИСЛО, "confidence": ЧИСЛО_0_1}
-Если нет подходящих — {"index": -1, "confidence": 0.0}.`
-        },
-        {
-          role: "user",
-          content: `Вопрос: "${question}"\n\nСписок FAQ:\n${listForModel}`
-        }
+        { role: "system", content: `Ты — поисковик FAQ банка. Верни СТРОГО JSON: {"index": ЧИСЛО, "confidence": ЧИСЛО_0_1}` },
+        { role: "user", content: `Вопрос: "${question}"\n\nСписок FAQ:\n${listForModel}` }
       ],
       temperature: 0
     });
 
     let raw = response.data.choices?.[0]?.message?.content?.trim() ?? "";
     raw = raw.replace(/```json/gi, "").replace(/```/g, "").trim();
-    const start = raw.indexOf("{"), end = raw.lastIndexOf("}");
-    if (start !== -1 && end !== -1) raw = raw.slice(start, end + 1);
+    const s = raw.indexOf("{"), e = raw.lastIndexOf("}");
+    if (s !== -1 && e !== -1) raw = raw.slice(s, e + 1);
 
-    let parsed;
-    try { parsed = JSON.parse(raw); }
-    catch { return null; }
-
+    const parsed = JSON.parse(raw);
     const subIdx = Number(parsed.index);
-    const conf   = Number(parsed.confidence);
+    const conf = Number(parsed.confidence);
+
+    responseTime.observe(Date.now() - start);
 
     if (!(subIdx >= 0 && subIdx < subset.length)) return null;
     if (conf < 0.85) return null;
@@ -115,19 +113,17 @@ export async function searchFAQWithGemma(question) {
       if (qCode !== faqCode) return null;
     }
 
-    return { type: "faq-gemma", answer: faq[picked.origIndex].answer, confidence: conf, index: picked.origIndex };
+    return { type: "faq", answer: faq[picked.origIndex].answer, confidence: conf, index: picked.origIndex };
   } catch (err) {
     console.error("❌ Gemma FAQ error:", err.message);
     return null;
   }
 }
 
-/* ────────────────────────────────────────────────────────────────────────────
- * 2) Основной ответ от Mistral/Llama
- * ────────────────────────────────────────────────────────────────────────────*/
+// --- Основной ответ от LLM ---
 export async function askLLM(question) {
+  const start = Date.now();
   try {
-    console.log("🚀 Mistra вызов...");
     const response = await axios.post(MISTRAL_URL, {
       model: "fireball-meta-llama-3.2-8b-instruct-agent-003-128k-code-dpo",
       messages: [
@@ -141,6 +137,7 @@ export async function askLLM(question) {
     const sentences = answer.split(/(?<=[.!?])\s+/);
     if (sentences.length > 2) answer = sentences.slice(0, 2).join(" ");
 
+    responseTime.observe(Date.now() - start);
     return { type: "llm", answer };
   } catch (err) {
     console.error("❌ Ошибка Mistra:", err.message);
@@ -148,90 +145,85 @@ export async function askLLM(question) {
   }
 }
 
-/* ────────────────────────────────────────────────────────────────────────────
- * Логирование и история
- * ────────────────────────────────────────────────────────────────────────────*/
-function logInteraction(question, category, source, answer, extra = "") {
+// --- Логирование и история ---
+function logInteraction(question, category, source, answer) {
   const logLine =
-    `[${new Date().toISOString()}] Категория: ${category} | Источник: ${source}${extra ? " " + extra : ""}\n` +
+    `[${new Date().toISOString()}] Категория: ${category} | Источник: ${source}\n` +
     `Вопрос: ${question}\nОтвет: ${answer}\n\n`;
-  fs.appendFileSync("logs.txt", logLine, "utf8");
+  fs.appendFileSync(LOG_FILE, logLine, "utf8");
 }
 
 function saveHistory(userMsg, assistantMsg) {
   let history = [];
-  if (fs.existsSync("chat_history.json")) {
-    try { history = JSON.parse(fs.readFileSync("chat_history.json", "utf-8")) || []; }
+  if (fs.existsSync(HISTORY_FILE)) {
+    try { history = JSON.parse(fs.readFileSync(HISTORY_FILE, "utf-8")) || []; }
     catch { history = []; }
   }
   history.push(userMsg, assistantMsg);
-  fs.writeFileSync("chat_history.json", JSON.stringify(history, null, 2));
+  fs.writeFileSync(HISTORY_FILE, JSON.stringify(history, null, 2));
 }
 
-/* ────────────────────────────────────────────────────────────────────────────
- * Главный обработчик
- * ────────────────────────────────────────────────────────────────────────────*/
+// --- Главный обработчик ---
 export async function getAnswer(question) {
+  totalQuestions.inc();
+
   const clean = question.toLowerCase().trim();
+  let finalAnswer, source;
 
-  if (["спасибо", "благодарю"].includes(clean)) {
-    const msg = "Пожалуйста!";
-    logInteraction(question, "Вежливость", "rule", msg);
-    saveHistory({ role: "user", content: question }, { role: "assistant", content: msg });
-    return { answer: msg };
-  }
-  if (["привет", "здравствуй", "добрый день"].includes(clean)) {
-    const msg = "Здравствуйте!";
-    logInteraction(question, "Приветствие", "rule", msg);
-    saveHistory({ role: "user", content: question }, { role: "assistant", content: msg });
-    return { answer: msg };
-  }
-
-  if (!isAllowedQuestion(question)) {
-    const msg = "⚠️ Ваш запрос не относится к техподдержке.";
-    logInteraction(question, "Запрещённый", "filter", msg);
-    saveHistory({ role: "user", content: question }, { role: "assistant", content: msg });
-    return { answer: msg };
-  }
-
-  const category = classifySimple(question);
-
-  if (isOperatorRequest(question)) {
-    const msg = "🧑‍💻 Передаю обращение специалисту поддержки. Ожидайте ответа.";
-    logInteraction(question, category, "operator", msg);
-    saveHistory({ role: "user", content: question }, { role: "assistant", content: msg });
-    return { answer: msg };
-  }
-
-  // 1) FAQ через Gemma
-  const faqGemma = await searchFAQWithGemma(question);
-  if (faqGemma) {
-    const msg = `📚 Ответ из базы знаний: ${faqGemma.answer}`;
-    logInteraction(question, category, "FAQ-Gemma", msg, `(index=${faqGemma.index}, confidence=${faqGemma.confidence})`);
-    saveHistory({ role: "user", content: question }, { role: "assistant", content: msg });
-    return { answer: msg };
-  }
-
-  // 2) Основная LLM
-  const llm = await askLLM(question);
-  let finalAnswer;
-
-  if (
-    llm.type === "llm" &&
-    (llm.answer.toLowerCase().includes("не знаю") ||
-     llm.answer.toLowerCase().includes("не могу помочь") ||
-     llm.answer.length < 15)
-  ) {
-    finalAnswer = "🧑‍💻 Передаю обращение специалисту поддержки. Ожидайте ответа.";
-    logInteraction(question, category, "operator", finalAnswer);
-  } else if (llm.type === "llm") {
-    finalAnswer = `🤖 Ответ от mistra: ${llm.answer}`;
-    logInteraction(question, category, "mistra", finalAnswer);
+  // Проверяем запрос на оператора (автооператор)
+  if (isOperatorRequest(clean)) {
+    finalAnswer = "🧑‍💻 Передаю обращение автооператору. Ожидайте ответа.";
+    forwardedToOperator.labels("explicit").inc();  // явный запрос
+    source = "operator";  // указываем источник
+  } else if (["спасибо", "благодарю"].includes(clean)) {
+    finalAnswer = "Пожалуйста!";
+    source = "rule";
+  } else if (["привет", "здравствуй", "добрый день"].includes(clean)) {
+    finalAnswer = "Здравствуйте!";
+    source = "rule";
+  } else if (!isAllowedQuestion(question)) {
+    finalAnswer = "⚠️ Ваш запрос не относится к техподдержке.";
+    source = "filter";
   } else {
-    finalAnswer = "🧑‍💻 Передаю обращение специалисту поддержки. Ожидайте ответа.";
-    logInteraction(question, category, "operator(fallback)", finalAnswer);
+    // Применяем классификатор
+    const category = classifySimple(question);
+
+    if (category === "Ошибки") {
+      // Если классификатор определяет ошибку, сразу обрабатываем запрос в FAQ
+      const faqGemma = await searchFAQWithGemma(question);
+      if (faqGemma) {
+        answeredByFAQ.inc();
+        finalAnswer = `📚 Ответ из базы знаний: ${faqGemma.answer}`;
+        source = "faq";
+      } else {
+        finalAnswer = "🧑‍💻 Передаю обращение специалисту поддержки. Ожидайте ответа.";
+        forwardedToOperator.labels("fallback").inc();
+        source = "operator-fallback";
+      }
+    } else {
+      // Иначе идем в модель
+      const faqGemma = await searchFAQWithGemma(question);
+      if (faqGemma) {
+        answeredByFAQ.inc();
+        finalAnswer = `📚 Ответ из базы знаний: ${faqGemma.answer}`;
+        source = "faq";
+      } else {
+        const llm = await askLLM(question);
+        if (llm.type === "llm") {
+          answeredByLLM.inc();
+          finalAnswer = `🤖 Ответ от mistra: ${llm.answer}`;
+          source = "llm";
+        } else {
+          forwardedToOperator.labels("fallback").inc();
+          finalAnswer = "🧑‍💻 Передаю обращение специалисту поддержки. Ожидайте ответа.";
+          source = "operator-fallback";
+        }
+      }
+    }
   }
 
   saveHistory({ role: "user", content: question }, { role: "assistant", content: finalAnswer });
-  return { answer: finalAnswer };
+  logInteraction(question, classifySimple(question), source, finalAnswer);
+
+  return { answer: finalAnswer, meta: { source } };
 }
