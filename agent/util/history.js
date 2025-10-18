@@ -1,6 +1,7 @@
 import fs from "fs";
 
 const HISTORY_FILE = "/app/data/chat_history.json";
+const MAX_HISTORY_LENGTH = 10;  // Максимальное количество сообщений в истории
 
 // Функция для загрузки истории
 function loadHistory() {
@@ -56,18 +57,31 @@ function saveHistory(userMsg, assistantMsg) {
 
   if (fs.existsSync(HISTORY_FILE)) {
     try {
-      history = JSON.parse(fs.readFileSync(HISTORY_FILE, "utf-8")) || [];
+      const fileContent = fs.readFileSync(HISTORY_FILE, "utf-8");
+      // Если файл пустой, возвращаем пустой массив
+      if (!fileContent.trim()) {
+        history = [];
+      } else {
+        history = JSON.parse(fileContent);
+      }
     } catch (error) {
       console.error("Ошибка при загрузке истории:", error);
-      history = [];
+      history = []; // В случае ошибки, создаём пустой массив
     }
   }
 
-  // Добавляем новое сообщение в историю
-  history.push(userMsg, assistantMsg);
-  
-  // Сохраняем обновлённую историю
-  fs.writeFileSync(HISTORY_FILE, JSON.stringify(history, null, 2));
+  // Преобразуем новые сообщения в формат массива
+  const newHistory = [userMsg, assistantMsg];
+
+  // Удаляем пустые значения и массивы из истории
+  history = history.filter(item => item && item.role && item.content); 
+
+  // Ограничиваем количество сообщений в истории до MAX_HISTORY_LENGTH
+  const MAX_HISTORY_LENGTH = 10;
+  const updatedHistory = [...history.slice(-MAX_HISTORY_LENGTH + 1), ...newHistory];
+
+  // Записываем обновлённую историю в файл
+  fs.writeFileSync(HISTORY_FILE, JSON.stringify(updatedHistory, null, 2));
 }
 
 // Функция для очистки истории

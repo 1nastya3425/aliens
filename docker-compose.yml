@@ -10,7 +10,7 @@ services:
       - "3000:3000"
     environment:
       GEMMA_URL: "http://host.docker.internal:1234/v1/chat/completions"
-      MISTRAL_URL: "http://host.docker.internal:1234/v1/chat/completions"
+      LLAMA_URL: "http://host.docker.internal:1234/v1/chat/completions"
     volumes:
       - ./data:/app/data
     command: ["node", "server.js"]
