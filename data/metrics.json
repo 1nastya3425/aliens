@@ -1,0 +1,37 @@
+{
+  "totalQuestions": 7,
+  "categories": {
+    "Небанковское": 6
+  },
+  "errors": 4,
+  "forwardedToOperator": 2,
+  "times": [
+    323,
+    3094,
+    243,
+    194,
+    187
+  ],
+  "confidences": [
+    0.95,
+    0.95,
+    0.95,
+    0.95
+  ],
+  "answeredByLLM": 1,
+  "timeStats": {
+    "min": 187,
+    "max": 243,
+    "sum": 624,
+    "count": 3,
+    "avg": 208
+  },
+  "confidenceStats": {
+    "min": 0.95,
+    "max": 0.95,
+    "sum": 2.8499999999999996,
+    "count": 3,
+    "avg": 0.9499999999999998
+  },
+  "answeredByFAQ": 3
+}

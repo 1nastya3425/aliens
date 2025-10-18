@@ -1,0 +1,14 @@
+FROM node:20-alpine
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm install
+
+COPY . .
+
+# Vite по умолчанию на 5173
+EXPOSE 5173
+
+# Указываем хост 0.0.0.0, иначе будет "ERR_EMPTY_RESPONSE"
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
